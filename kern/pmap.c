@@ -105,8 +105,8 @@ boot_alloc(uint32_t n)
 	//
 	// LAB 2: Your code here.
 	// 返回一个地址，并更新nextFree
-	result = (char *)nextfree;
-	nextfree = ROUNDUP(result + n, PGSIZE);
+	result = nextfree;
+	nextfree = ROUNDUP((char *)result + n, PGSIZE);
 	cprintf("boot_alloc memory at %x, next memory allocate at %x\n", result, nextfree);
 	return result;
 }
@@ -162,6 +162,10 @@ mem_init(void)
 	//////////////////////////////////////////////////////////////////////
 	// Make 'envs' point to an array of size 'NENV' of 'struct Env'.
 	// LAB 3: Your code here.
+	// 为ENVS数组分配空间
+	envs = (struct Env*) boot_alloc(sizeof(struct Env) * NENV);
+	memset(envs, 0, sizeof(struct Env) * NENV);
+	
 
 	//////////////////////////////////////////////////////////////////////
 	// Now that we've allocated the initial kernel data structures, we set
@@ -197,6 +201,7 @@ mem_init(void)
 	//    - the new image at UENVS  -- kernel R, user R
 	//    - envs itself -- kernel RW, user NONE
 	// LAB 3: Your code here.
+	boot_map_region(kern_pgdir, UENVS, PTSIZE, PADDR(envs), PTE_U);
 
 	//////////////////////////////////////////////////////////////////////
 	// Use the physical memory that 'bootstack' refers to as the kernel
@@ -571,6 +576,18 @@ int
 user_mem_check(struct Env *env, const void *va, size_t len, int perm)
 {
 	// LAB 3: Your code here.
+	cprintf("user_mem_check va: %x, len: %x\n", va, len);
+	uint32_t begin = (uint32_t) ROUNDDOWN(va, PGSIZE); 
+	uint32_t end = (uint32_t) ROUNDUP(va+len, PGSIZE);
+	uint32_t i;
+	for (i = (uint32_t)begin; i < end; i += PGSIZE) {
+		pte_t *pte = pgdir_walk(env->env_pgdir, (void*)i, 0);
+		if ((i >= ULIM) || !pte || !(*pte & PTE_P) || ((*pte & perm) != perm)) { //具体检测规则
+			user_mem_check_addr = (i < (uint32_t)va ? (uint32_t)va : i);  //记录无效的那个线性地址
+			return -E_FAULT;
+		}
+	}
+	cprintf("user_mem_check success va: %x, len: %x\n", va, len);
 
 	return 0;
 }
@@ -581,7 +598,7 @@ user_mem_check(struct Env *env, const void *va, size_t len, int perm)
 // If it can, then the function simply returns.
 // If it cannot, 'env' is destroyed and, if env is the current
 // environment, this function will not return.
-//
+// 内存范围检查，防止用户态程序访问内核
 void
 user_mem_assert(struct Env *env, const void *va, size_t len, int perm)
 {
