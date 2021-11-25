@@ -113,13 +113,18 @@ envid2env(envid_t envid, struct Env **env_store, bool checkperm)
 // Make sure the environments are in the free list in the same order
 // they are in the envs array (i.e., so that the first call to
 // env_alloc() returns envs[0]).
-//
+// 初始化envs数组，构建env_free_list链表，使用头插法
 void
 env_init(void)
 {
 	// Set up envs array
 	// LAB 3: Your code here.
-
+	env_free_list = NULL;
+	for(int i = NENV - 1; i >= 0; i--){
+		envs[i].env_id = 0;
+		envs[i].env_link = env_free_list;
+		env_free_list = &envs[i];
+	}
 	// Per-CPU part of the initialization
 	env_init_percpu();
 }
@@ -181,7 +186,10 @@ env_setup_vm(struct Env *e)
 	//	pp_ref for env_free to work correctly.
 	//    - The functions in kern/pmap.h are handy.
 
-	// LAB 3: Your code here.
+	// 将刚分配的物理页用作页目录，并让其从内核页目录继承数据
+	p->pp_ref++;
+	e->env_pgdir = (pde_t *) page2kva(p);
+	memcpy(e->env_pgdir, kern_pgdir, PGSIZE); 
 
 	// UVPT maps the env's own page table read-only.
 	// Permissions: kernel R, user R
@@ -268,7 +276,7 @@ env_alloc(struct Env **newenv_store, envid_t parent_id)
 // Does not zero or otherwise initialize the mapped pages in any way.
 // Pages should be writable by user and kernel.
 // Panic if any allocation attempt fails.
-//
+// 在e指向的用户环境中，为va开头，长度为len的地址分配物理空间。
 static void
 region_alloc(struct Env *e, void *va, size_t len)
 {
@@ -279,6 +287,15 @@ region_alloc(struct Env *e, void *va, size_t len)
 	//   'va' and 'len' values that are not page-aligned.
 	//   You should round va down, and round (va + len) up.
 	//   (Watch out for corner-cases!)
+	void *begin = ROUNDDOWN(va, PGSIZE), *end = ROUNDUP(va+len, PGSIZE); // 以PGSIZE取整
+	while(begin < end){
+		struct PageInfo * p = page_alloc(0);
+		if(p == NULL){
+			panic("region_alloc: Out of Memory!\n");
+		}
+		page_insert(e->env_pgdir, p, begin, PTE_W | PTE_U);
+		begin += PGSIZE;
+	}
 }
 
 //
@@ -302,7 +319,7 @@ region_alloc(struct Env *e, void *va, size_t len)
 //
 // load_icode panics if it encounters problems.
 //  - How might load_icode fail?  What might be wrong with the given input?
-//
+// 加载可执行文件到Env中
 static void
 load_icode(struct Env *e, uint8_t *binary)
 {
@@ -335,11 +352,35 @@ load_icode(struct Env *e, uint8_t *binary)
 	//  What?  (See env_run() and env_pop_tf() below.)
 
 	// LAB 3: Your code here.
+	struct Elf * ELF = (struct Elf *) binary;
+	struct Proghdr * ph;
+	int ph_num;
+	if(ELF->e_magic != ELF_MAGIC){ // 判断格式是否是ELF
+		panic("Binary is not ELF format! \n");
+	}
+
+	ph = (struct Proghdr *) ((uint8_t *)ELF + ELF->e_phoff); // ph是程序头距离ELF的偏移
+	ph_num = ELF->e_phnum;
+	lcr3(PADDR(e->env_pgdir)); // 切换到当前用户环境的页目录表
+	for(int i = 0; i < ph_num; i++){
+		if(ph[i].p_type == ELF_PROG_LOAD){ // 只加载Load类型的Segment
+			if (ph->p_filesz > ph->p_memsz) {
+                panic("load_icode: file size is greater than memory size");
+            }
+			region_alloc(e, (void*)ph[i].p_va, ph[i].p_memsz); // 给每个Segment分配物理空间
+			memset((void*)ph[i].p_va, 0, ph[i].p_memsz);
+			memcpy((void*)ph[i].p_va, binary + ph[i].p_offset, ph[i].p_filesz);
+		}
+	}
+	e->env_tf.tf_eip = ELF->e_entry; // EIP指向程序入口
 
 	// Now map one page for the program's initial stack
 	// at virtual address USTACKTOP - PGSIZE.
 
 	// LAB 3: Your code here.
+	// 分配初始栈空间
+	region_alloc(e, (void*)(USTACKTOP - PGSIZE), PGSIZE);
+	lcr3(PADDR(kern_pgdir)); // 切换回系统的页目录表
 }
 
 //
@@ -348,11 +389,18 @@ load_icode(struct Env *e, uint8_t *binary)
 // This function is ONLY called during kernel initialization,
 // before running the first user-mode environment.
 // The new env's parent ID is set to 0.
-//
+// 从env_free_list链表拿一个Env结构，加载从binary地址开始处的ELF可执行文件到该Env结构。
 void
 env_create(uint8_t *binary, enum EnvType type)
 {
 	// LAB 3: Your code here.
+	struct Env * e;
+	int r = env_alloc(&e, 0);
+	if(r < 0){
+		panic("env_create: Create Env failed: %e", r);
+	}
+	e->env_type = type;
+	load_icode(e, binary);
 }
 
 //
@@ -461,7 +509,7 @@ env_pop_tf(struct Trapframe *tf)
 // Note: if this is the first call to env_run, curenv is NULL.
 //
 // This function does not return.
-//
+// 开启一段Env
 void
 env_run(struct Env *e)
 {
@@ -483,7 +531,13 @@ env_run(struct Env *e)
 	//	e->env_tf to sensible values.
 
 	// LAB 3: Your code here.
-
-	panic("env_run not yet implemented");
+	if(curenv != NULL && curenv->env_status == ENV_RUNNING){ //如果当前有运行的Env，则挂起
+		curenv->env_status = ENV_RUNNABLE;
+	}
+	curenv = e;
+	e->env_status = ENV_RUNNING;
+	e->env_runs++;
+	lcr3(PADDR(e->env_pgdir)); // 加载当前Env的线性地址到分页寄存器
+	env_pop_tf(&e->env_tf); // 从栈中取tf结构
 }
 
