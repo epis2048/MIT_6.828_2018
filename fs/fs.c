@@ -54,6 +54,7 @@ free_block(uint32_t blockno)
 // -E_NO_DISK if we are out of blocks.
 //
 // Hint: use free_block as an example for manipulating the bitmap.
+// 查找一个空块并返回，将其标记为已使用
 int
 alloc_block(void)
 {
@@ -62,7 +63,14 @@ alloc_block(void)
 	// super->s_nblocks blocks in the disk altogether.
 
 	// LAB 5: Your code here.
-	panic("alloc_block not implemented");
+	// panic("alloc_block not implemented");
+	for (int i = 0; i < super->s_nblocks; i++) { // 遍历
+		if (block_is_free(i)) { // 空块
+			bitmap[i/32] ^= (1<<(i%32)); // 异或即可
+			flush_block(diskaddr(i)); // 刷新缓存
+			return i;
+		}
+	}
 	return -E_NO_DISK;
 }
 
@@ -131,11 +139,39 @@ fs_init(void)
 //
 // Analogy: This is like pgdir_walk for files.
 // Hint: Don't forget to clear any block you allocate.
+// 在f文件里面找到第filebno块对应的地址，储存到*ppdiskbno，可能在f->f_direct[]里面
+// 或者间接块里面，如果我们分配位置设置了，就分配一个
 static int
 file_block_walk(struct File *f, uint32_t filebno, uint32_t **ppdiskbno, bool alloc)
 {
-       // LAB 5: Your code here.
-       panic("file_block_walk not implemented");
+    // LAB 5: Your code here.
+    // panic("file_block_walk not implemented");
+	// 文件块数超出最大值限制
+	if (filebno >= NDIRECT + NINDIRECT) return -E_INVAL;
+	// 如果在直接块里面，就直接返回
+	if (filebno < NDIRECT) {
+		*ppdiskbno = &(f->f_direct[filebno]);
+	}
+	// 如果在间接块里面
+	else {
+		if (f->f_indirect) {
+			*ppdiskbno = &(((uint32_t *)diskaddr(f->f_indirect))[filebno-NDIRECT]);
+		}
+		else { // 都没有则根据要求判断是否创建
+			if (alloc) {
+				int r = alloc_block();
+				if (r < 0) return -E_NO_DISK;
+				f->f_indirect = r; // 间接块号
+				memset(diskaddr(f->f_indirect), 0, BLKSIZE); // 初始化0
+				flush_block(diskaddr(f->f_indirect)); // 刷新缓存
+				*ppdiskbno = &(((uint32_t *)diskaddr(f->f_indirect))[filebno-NDIRECT]);
+			}
+			else {
+				return -E_NOT_FOUND;
+			}
+		}
+	}
+	return 0;
 }
 
 // Set *blk to the address in memory where the filebno'th
@@ -146,11 +182,28 @@ file_block_walk(struct File *f, uint32_t filebno, uint32_t **ppdiskbno, bool all
 //	-E_INVAL if filebno is out of range.
 //
 // Hint: Use file_block_walk and alloc_block.
+// 设置*blk为在f文件的第fileno的地址,要用到上一个函数。
 int
 file_get_block(struct File *f, uint32_t filebno, char **blk)
 {
-       // LAB 5: Your code here.
-       panic("file_get_block not implemented");
+    // LAB 5: Your code here.
+    // panic("file_get_block not implemented");
+	uint32_t *ppdiskbno, blockno;
+	int r=0; // 首先得知道对应磁盘中的块号是多少，
+	// 通过这个函数ppdiskbno就是指向对应磁盘块号的地址，也就是*ppdiskbno存的是块号。
+	if ((r = file_block_walk(f, filebno, &ppdiskbno, true)) < 0)
+    	return r;
+    if ((*ppdiskbno) == 0) { // 块号是 0 说明还没有分配块
+    	if ((r = alloc_block()) < 0) // 分配一个块
+        	return r;
+        blockno = r;
+        *ppdiskbno = blockno; // 指向那个块
+        flush_block(diskaddr(*ppdiskbno)); // 刷新缓存
+    }
+    if (blk) {
+    	*blk = (char *)diskaddr(*ppdiskbno); // 块号在磁盘中的地址 是*blk存的是虚拟地址指针
+	}
+	return 0;
 }
 
 // Try to find a file named "name" in dir.  If so, set *file to it.

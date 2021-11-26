@@ -136,7 +136,16 @@ sys_env_set_trapframe(envid_t envid, struct Trapframe *tf)
 	// LAB 5: Your code here.
 	// Remember to check whether the user has supplied us with a good
 	// address!
-	panic("sys_env_set_trapframe not implemented");
+	// panic("sys_env_set_trapframe not implemented");
+	struct Env * e;
+	if (envid2env(envid, &e, 1) < 0) {
+		return -E_BAD_ENV;
+	}
+	e->env_tf = *tf;
+	e->env_tf.tf_cs |= 0x3; // 修改一下提示要求的值
+	e->env_tf.tf_eflags &=  (~FL_IOPL_MASK); // 普通进程不能有IO权限
+	e->env_tf.tf_eflags |= FL_IF;
+	return 0;
 }
 
 // Set the page fault upcall for 'envid' by modifying the corresponding struct
@@ -346,7 +355,7 @@ sys_ipc_try_send(envid_t envid, uint32_t value, void *srcva, unsigned perm)
 
 		//按照注释的顺序进行判定
 		if (srcva != ROUNDDOWN(srcva, PGSIZE)) return -E_INVAL; //srcva没有页对齐
-		if ((*pte & perm) != perm) return -E_INVAL; //perm应该是*pte的子集
+		if ((*pte & perm & 7) != (perm & 7)) return -E_INVAL; //perm应该是*pte的子集
 		if (!pg) return -E_INVAL; //srcva还没有映射到物理页
 		if ((perm & PTE_W) && !(*pte & PTE_W)) return -E_INVAL; //写权限
 		
@@ -439,6 +448,9 @@ syscall(uint32_t syscallno, uint32_t a1, uint32_t a2, uint32_t a3, uint32_t a4, 
 			break;
 		case SYS_ipc_recv:                                                                                              
 			ret =  sys_ipc_recv((void *)a1);
+			break;
+		case SYS_env_set_trapframe:
+			ret =  sys_env_set_trapframe((envid_t)a1,(struct Trapframe*)a2);
 			break;
 		default:
 			ret = -E_INVAL;
