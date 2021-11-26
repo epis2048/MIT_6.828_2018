@@ -259,7 +259,7 @@ mem_init(void)
 
 // Modify mappings in kern_pgdir to support SMP
 //   - Map the per-CPU stacks in the region [KSTACKTOP-PTSIZE, KSTACKTOP)
-//
+// 将内核栈线性地址映射到percpu_kstacks处的物理地址处。
 static void
 mem_init_mp(void)
 {
@@ -279,7 +279,15 @@ mem_init_mp(void)
 	//     Permissions: kernel RW, user NONE
 	//
 	// LAB 4: Your code here:
-
+	for(size_t i = 0; i < NCPU; i++) {
+		boot_map_region(
+			kern_pgdir,
+			KSTACKTOP - KSTKSIZE - i * (KSTKSIZE + KSTKGAP), 
+			KSTKSIZE, 
+			PADDR(percpu_kstacks[i]), 
+			PTE_W
+		);
+	}
 }
 
 // --------------------------------------------------------------
@@ -342,6 +350,10 @@ page_init(void)
 			page_free_list = &pages[i];
 		}
 	}
+	// 把MPENTRY_PADDR这块地址也在空闲列表里面删除。
+	uint32_t range_mpentry = PGNUM(MPENTRY_PADDR);
+	pages[range_mpentry+1].pp_link=pages[range_mpentry].pp_link;
+	pages[range_mpentry].pp_link=NULL;
 }
 
 //
@@ -590,14 +602,14 @@ tlb_invalidate(pde_t *pgdir, void *va)
 // Reserve size bytes in the MMIO region and map [pa,pa+size) at this
 // location.  Return the base of the reserved region.  size does *not*
 // have to be multiple of PGSIZE.
-//
+// 调用boot_map_region()，将MMIO区域映射到物理地址。
 void *
 mmio_map_region(physaddr_t pa, size_t size)
 {
 	// Where to start the next region.  Initially, this is the
 	// beginning of the MMIO region.  Because this is static, its
 	// value will be preserved between calls to mmio_map_region
-	// (just like nextfree in boot_alloc).
+	// *****just like nextfree in boot_alloc*****
 	static uintptr_t base = MMIOBASE;
 
 	// Reserve size bytes of virtual memory starting at base and
@@ -618,7 +630,19 @@ mmio_map_region(physaddr_t pa, size_t size)
 	// Hint: The staff solution uses boot_map_region.
 	//
 	// Your code here:
-	panic("mmio_map_region not implemented");
+	// 将size以页为单位向上取整
+	size = ROUNDUP(pa+size, PGSIZE);
+	pa = ROUNDDOWN(pa, PGSIZE);
+	size -= pa;	
+	// Err
+	if(base + size >= MMIOLIM){
+		panic("mmio_map_region: Out of memory\n");
+	}
+	// 做映射
+	boot_map_region(kern_pgdir, base, size, pa, PTE_PCD | PTE_PWT | PTE_W);
+	// 更新base
+	base += size;
+	return (void*)(base - size);
 }
 
 static uintptr_t user_mem_check_addr;
@@ -645,7 +669,7 @@ int
 user_mem_check(struct Env *env, const void *va, size_t len, int perm)
 {
 	// LAB 3: Your code here.
-	cprintf("user_mem_check va: %x, len: %x\n", va, len);
+	// cprintf("user_mem_check va: %x, len: %x\n", va, len);
 	uint32_t begin = (uint32_t) ROUNDDOWN(va, PGSIZE); 
 	uint32_t end = (uint32_t) ROUNDUP(va+len, PGSIZE);
 	uint32_t i;
@@ -656,7 +680,7 @@ user_mem_check(struct Env *env, const void *va, size_t len, int perm)
 			return -E_FAULT;
 		}
 	}
-	cprintf("user_mem_check success va: %x, len: %x\n", va, len);
+	// cprintf("user_mem_check success va: %x, len: %x\n", va, len);
 
 	return 0;
 }

@@ -88,6 +88,25 @@ trap_init(void)
 	void th14();
 	void th16();
 	void th_syscall();
+	void IRQ0();
+	void IRQ1();
+	void IRQ2();
+	void IRQ3();
+	void IRQ4();
+	void IRQ5();
+	void IRQ6();
+	void IRQ7();
+	void IRQ8();
+	void IRQ9();
+	void IRQ10();
+	void IRQ11();
+	void IRQ12();
+	void IRQ13();
+	void IRQ14();
+	void IRQ15();
+
+
+
 	SETGATE(idt[0], 0, GD_KT, th0, 0); //格式如下：SETGATE(gate, istrap, sel, off, dpl)，定义在inc/mmu.h中
 	SETGATE(idt[1], 0, GD_KT, th1, 0); //设置idt[1]，段选择子为内核代码段，段内偏移为th1
 	SETGATE(idt[3], 0, GD_KT, th3, 3);
@@ -105,6 +124,23 @@ trap_init(void)
 	SETGATE(idt[16], 0, GD_KT, th16, 0);
 
 	SETGATE(idt[T_SYSCALL], 0, GD_KT, th_syscall, 3);		//为什么门的DPL要定义为3，参考《x86汇编语言-从实模式到保护模式》p345
+	SETGATE(idt[IRQ_OFFSET], 0, GD_KT, IRQ0, 0);
+	SETGATE(idt[IRQ_OFFSET+1], 0, GD_KT, IRQ1, 0);
+	SETGATE(idt[IRQ_OFFSET+2], 0, GD_KT, IRQ2, 0);
+	SETGATE(idt[IRQ_OFFSET+3], 0, GD_KT, IRQ3, 0);
+	SETGATE(idt[IRQ_OFFSET+4], 0, GD_KT, IRQ4, 0);
+	SETGATE(idt[IRQ_OFFSET+5], 0, GD_KT, IRQ5, 0);
+	SETGATE(idt[IRQ_OFFSET+6], 0, GD_KT, IRQ6, 0);
+	SETGATE(idt[IRQ_OFFSET+7], 0, GD_KT, IRQ7, 0);
+	SETGATE(idt[IRQ_OFFSET+8], 0, GD_KT, IRQ8, 0);
+	SETGATE(idt[IRQ_OFFSET+9], 0, GD_KT, IRQ9, 0);
+	SETGATE(idt[IRQ_OFFSET+10], 0, GD_KT, IRQ10, 0);
+	SETGATE(idt[IRQ_OFFSET+11], 0, GD_KT, IRQ11, 0);
+	SETGATE(idt[IRQ_OFFSET+12], 0, GD_KT, IRQ12, 0);
+	SETGATE(idt[IRQ_OFFSET+13], 0, GD_KT, IRQ13, 0);
+	SETGATE(idt[IRQ_OFFSET+14], 0, GD_KT, IRQ14, 0);
+	SETGATE(idt[IRQ_OFFSET+15], 0, GD_KT, IRQ15, 0);
+
 	// Per-CPU setup 
 	trap_init_percpu();
 }
@@ -137,6 +173,21 @@ trap_init_percpu(void)
 	// user space on that CPU.
 	//
 	// LAB 4: Your code here:
+	// 照着下面代码写即可，主要是把ts用thiscpu->cpu_ts代替
+	int i = thiscpu->cpu_id;
+	thiscpu->cpu_ts.ts_esp0 = KSTACKTOP - i * (KSTKSIZE + KSTKGAP);
+	thiscpu->cpu_ts.ts_ss0 = GD_KD;
+	thiscpu->cpu_ts.ts_iomb = sizeof(struct Taskstate);
+
+	gdt[(GD_TSS0 >> 3) + i] = SEG16(STS_T32A, (uint32_t) (&(thiscpu->cpu_ts)),
+					sizeof(struct Taskstate) - 1, 0);
+	gdt[(GD_TSS0 >> 3) + i].sd_s = 0;
+
+	ltr(GD_TSS0 + 8 * i);
+
+	lidt(&idt_pd);
+
+	/*
 
 	// Setup a TSS so that we get the right stack
 	// when we trap to the kernel.
@@ -152,9 +203,11 @@ trap_init_percpu(void)
 	// Load the TSS selector (like other segment selectors, the
 	// bottom three bits are special; we leave them 0)
 	ltr(GD_TSS0);
+	
 
 	// Load the IDT
 	lidt(&idt_pd);
+	*/
 }
 
 void
@@ -218,7 +271,8 @@ trap_dispatch(struct Trapframe *tf)
 		monitor(tf);
 		return;
 	}
-	if (tf->tf_trapno == T_SYSCALL) { // 系统调用，从寄存器中取出系统调用号和五个参数，传给kern/syscall.c中的syscall()，并将返回值保存到tf->tf_regs.reg_eax
+	// 系统调用，从寄存器中取出系统调用号和五个参数，传给kern/syscall.c中的syscall()，并将返回值保存到tf->tf_regs.reg_eax
+	if (tf->tf_trapno == T_SYSCALL) { 
 		tf->tf_regs.reg_eax = syscall(tf->tf_regs.reg_eax, tf->tf_regs.reg_edx, tf->tf_regs.reg_ecx,
 			tf->tf_regs.reg_ebx, tf->tf_regs.reg_edi, tf->tf_regs.reg_esi);
 		return;
@@ -236,6 +290,12 @@ trap_dispatch(struct Trapframe *tf)
 	// Handle clock interrupts. Don't forget to acknowledge the
 	// interrupt using lapic_eoi() before calling the scheduler!
 	// LAB 4: Your code here.
+	// 时钟中断
+	if (tf->tf_trapno == IRQ_OFFSET + IRQ_TIMER) {
+		lapic_eoi();
+		sched_yield();
+		return;
+	}
 
 	// Unexpected trap: The user process or the kernel has a bug.
 	print_trapframe(tf);
@@ -273,6 +333,7 @@ trap(struct Trapframe *tf)
 		// Acquire the big kernel lock before doing any
 		// serious kernel work.
 		// LAB 4: Your code here.
+		lock_kernel();
 		assert(curenv);
 
 		// Garbage collect if current enviroment is a zombie
@@ -354,11 +415,36 @@ page_fault_handler(struct Trapframe *tf)
 	//   (the 'tf' variable points at 'curenv->env_tf').
 
 	// LAB 4: Your code here.
-
-	// Destroy the environment that caused the fault.
-	cprintf("[%08x] user fault va %08x ip %08x\n",
-		curenv->env_id, fault_va, tf->tf_eip);
-	print_trapframe(tf);
-	env_destroy(curenv);
+	if(curenv->env_pgfault_upcall){
+		struct UTrapframe *utr;
+		// 如果已经有了异常栈，我们就直接在后面添加一个UTrapframe，否则就先把跳到异常栈。 这是为了处理多级中断
+		if (tf->tf_esp >= UXSTACKTOP-PGSIZE && tf->tf_esp < UXSTACKTOP) {
+			// 异常模式下陷入
+			utr = (struct UTrapframe *)(tf->tf_esp - sizeof(struct UTrapframe) - 4);
+		}
+		else {
+			// 非异常模式下陷入
+			utr = (struct UTrapframe *)(UXSTACKTOP - sizeof(struct UTrapframe));	
+		}
+		// 检查异常栈是否溢出
+		user_mem_assert(curenv, (const void *) utr, sizeof(struct UTrapframe), PTE_P|PTE_W);
+		utr->utf_fault_va = fault_va;
+		utr->utf_err = tf->tf_trapno;
+		utr->utf_regs = tf->tf_regs;
+		utr->utf_eip = tf->tf_eip;
+		utr->utf_eflags = tf->tf_eflags;
+		utr->utf_esp = tf->tf_esp; // UXSTACKTOP栈上需要保存发生缺页异常时的%esp和%eip
+		// 设置eip，回到用户态
+		curenv->env_tf.tf_eip = (uintptr_t)curenv->env_pgfault_upcall;
+		curenv->env_tf.tf_esp = (uintptr_t)utr;
+		env_run(curenv); // 重新进入用户态
+	}
+	else{
+		// Destroy the environment that caused the fault.
+		cprintf("[%08x] user fault va %08x ip %08x\n",
+			curenv->env_id, fault_va, tf->tf_eip);
+		print_trapframe(tf);
+		env_destroy(curenv);
+	}
 }
 

@@ -255,6 +255,7 @@ env_alloc(struct Env **newenv_store, envid_t parent_id)
 
 	// Enable interrupts while in user mode.
 	// LAB 4: Your code here.
+	e->env_tf.tf_eflags |= FL_IF;
 
 	// Clear the page fault handler until user installs one.
 	e->env_pgfault_upcall = 0;
@@ -538,6 +539,8 @@ env_run(struct Env *e)
 	e->env_status = ENV_RUNNING;
 	e->env_runs++;
 	lcr3(PADDR(e->env_pgdir)); // 加载当前Env的线性地址到分页寄存器
+	// Lab4: 释放内核
+	unlock_kernel();
 	env_pop_tf(&e->env_tf); // 从栈中取tf结构
 }
 
