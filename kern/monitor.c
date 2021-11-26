@@ -59,6 +59,20 @@ int
 mon_backtrace(int argc, char **argv, struct Trapframe *tf)
 {
 	// Your code here.
+	uint32_t *ebp = (uint32_t *)read_ebp();
+	struct Eipdebuginfo eipDebugInfo;
+	while(ebp != 0){
+		uint32_t eip = *(ebp + 1);
+		//打印ebp，eip，最近的五个参数
+		cprintf("ebp %08x eip %08x args %08x %08x %08x %08x %08x\n", ebp, eip, *(ebp + 2), *(ebp + 3), *(ebp + 4), *(ebp + 5), *(ebp + 6));
+		//打印文件名等
+		debuginfo_eip((uintptr_t)eip, &eipDebugInfo);
+		//cprintf("%d", eipDebugInfo.eip_fn_namelen);
+		cprintf("\t%s:%d: %.*s+%d\n", eipDebugInfo.eip_file, eipDebugInfo.eip_line, eipDebugInfo.eip_fn_namelen, eipDebugInfo.eip_fn_name, eip - eipDebugInfo.eip_fn_addr);
+		//cprintf(": %.*s+%d\n", eipdebuginfo.eip_fn_namelen, eipdebuginfo.eip_fn_name, eipdebuginfo.eip_fn_addr);
+		//更新ebp
+		ebp = (uint32_t *)(*ebp);
+	}
 	return 0;
 }
 

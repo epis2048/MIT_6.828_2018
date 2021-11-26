@@ -30,7 +30,26 @@ sched_yield(void)
 	// below to halt the cpu.
 
 	// LAB 4: Your code here.
-
+	// 从当前运行的Env的下一个Env开始
+	
+	int nextEnvID = 0;
+	if(curenv) {
+		nextEnvID = ENVX(curenv->env_id);
+	}
+	// 寻找一个能运行的Env
+	for(int i = 0; i < NENV; i++){
+		if(envs[(nextEnvID + i) % NENV].env_status == ENV_RUNNABLE){
+			envs[(nextEnvID + i) % NENV].env_cpunum = cpunum();
+			env_run(&envs[(nextEnvID + i) % NENV]);
+		}
+	}
+	// 如果一个都找不到，那就继续运行当前的
+	if(curenv && curenv->env_status == ENV_RUNNING){
+		curenv->env_cpunum = cpunum();
+		env_run(curenv);
+	}
+	// 如果自己也运行不了，那当前CPU就停机吧
+	
 	// sched_halt never returns
 	sched_halt();
 }
@@ -76,7 +95,7 @@ sched_halt(void)
 		"pushl $0\n"
 		"pushl $0\n"
 		// Uncomment the following line after completing exercise 13
-		//"sti\n"
+		"sti\n"
 		"1:\n"
 		"hlt\n"
 		"jmp 1b\n"
