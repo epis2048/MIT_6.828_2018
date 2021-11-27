@@ -80,3 +80,19 @@ _pgfault_upcall:
 
 	// Return to re-execute the instruction that faulted.
 	// LAB 4: Your code here.
+
+  	// Struct PushRegs size = 32 
+  	addl $8, %esp                 // esp+8 -> PushRegs   over utf_fault_va utf_err
+	movl 0x20(%esp), %eax         // eax = (esp+0x20 -> utf_eip )
+	subl $4, 0x28(%esp)           // for trap time eip 保留32bit,   esp+48 = utf_esp
+	movl 0x28(%esp), %edx         // %edx = utf_esp-4  
+	movl %eax, (%edx)             // %eax = eip ----> esp-4  以至于ret可以直接读取其继续执行的地址
+	
+	popal              // after popal esp->utf_eip
+
+	addl $4, %esp      // esp+4 -> utf_eflags
+	popfl
+
+	popl %esp
+
+	ret                   // 这里十分巧妙， ret会读取esp指向的第一个内容， 也就是我们第一步写入的eip
