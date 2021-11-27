@@ -294,6 +294,9 @@ trap_dispatch(struct Trapframe *tf)
 	// 时钟中断
 	if (tf->tf_trapno == IRQ_OFFSET + IRQ_TIMER) {
 		lapic_eoi();
+		if (cpunum() == 0) { //lab6
+			time_tick();
+		}
 		sched_yield();
 		return;
 	}
@@ -302,6 +305,7 @@ trap_dispatch(struct Trapframe *tf)
 	// Be careful! In multiprocessors, clock interrupts are
 	// triggered on every CPU.
 	// LAB 6: Your code here.
+	// 直接修改Lab4代码
 
 
 	// Handle keyboard and serial interrupts.

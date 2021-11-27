@@ -10,19 +10,19 @@ enum { stack_size = PGSIZE };
 
 struct thread_context;
 
-struct thread_queue
+struct thread_queue // 线程队列
 {
     struct thread_context *tq_first;
     struct thread_context *tq_last;
 };
 
-struct thread_context {
-    thread_id_t		tc_tid;
-    void		*tc_stack_bottom;
-    char 		tc_name[name_size];
-    void		(*tc_entry)(uint32_t);
-    uint32_t		tc_arg;
-    struct jos_jmp_buf	tc_jb;
+struct thread_context { // 线程结构，TCB
+    thread_id_t		tc_tid; // ID
+    void		*tc_stack_bottom; // 线程栈
+    char 		tc_name[name_size]; // 线程名
+    void		(*tc_entry)(uint32_t); // 指令地址
+    uint32_t		tc_arg; // 参数
+    struct jos_jmp_buf	tc_jb; // CPU的内容
     volatile uint32_t	*tc_wait_addr;
     volatile char	tc_wakeup;
     void		(*tc_onhalt[THREAD_NUM_ONHALT])(thread_id_t);
