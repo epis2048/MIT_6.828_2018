@@ -1,3 +1,16 @@
 {
-    "C_Cpp.errorSquiggles": "Disabled"
+    "C_Cpp.errorSquiggles": "Disabled",
+    "files.associations": {
+        "setjmp.h": "c",
+        "lib.h": "c",
+        "string.h": "c",
+        "time.h": "c",
+        "env.h": "c",
+        "x86.h": "c",
+        "trap.h": "c",
+        "threadq.h": "c",
+        "pmap.h": "c",
+        "thread.h": "c",
+        "error.h": "c"
+    }
 }

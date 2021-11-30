@@ -22,6 +22,7 @@
 #include <inc/args.h>
 #include <inc/malloc.h>
 #include <inc/ns.h>
+#include <inc/x86.h>
 
 #define USED(x)		(void)(x)
 
@@ -33,6 +34,9 @@ extern const char *binaryname;
 extern const volatile struct Env *thisenv;
 extern const volatile struct Env envs[NENV];
 extern const volatile struct PageInfo pages[];
+extern volatile thdid_t main_thdid;
+#define thds ((struct Thd *)&envs[NENV])
+#define thisthd (&thds[ENVX(sys_getthdid())])
 
 // exit.c
 void	exit(void);
@@ -51,7 +55,6 @@ int	sys_env_destroy(envid_t);
 void	sys_yield(void);
 static envid_t sys_exofork(void);
 int	sys_env_set_status(envid_t env, int status);
-int	sys_env_set_trapframe(envid_t env, struct Trapframe *tf);
 int	sys_env_set_pgfault_upcall(envid_t env, void *upcall);
 int	sys_page_alloc(envid_t env, void *pg, int perm);
 int	sys_page_map(envid_t src_env, void *src_pg,
@@ -61,6 +64,14 @@ int	sys_ipc_try_send(envid_t to_env, uint32_t value, void *pg, int perm);
 int	sys_ipc_recv(void *rcv_pg);
 int sys_packet_try_send(void *data_va, int len);
 int sys_packet_receive(void *data_va, int *len);
+
+thdid_t	sys_getthdid(void);
+thdid_t sys_thd_create();
+int sys_thd_destroy(thdid_t tid);
+int sys_thd_set_status(thdid_t tid, int status);
+int sys_thd_set_trapframe(thdid_t tid, struct Trapframe * tf );
+int sys_thd_set_uxstack(thdid_t tid,uintptr_t uxstack );
+
 unsigned int sys_time_msec(void);
 
 // This must be inlined.  Exercise for reader: why?
@@ -139,6 +150,25 @@ int	pipeisclosed(int pipefd);
 
 // wait.c
 void	wait(envid_t env);
+
+// thread.c
+typedef volatile uint32_t spinlock_t;
+static __inline void __attribute__((always_inline))
+spin_lock(spinlock_t *lock)
+{
+	while(xchg(lock, 1))
+		sys_yield();
+}
+
+static __inline void __attribute__((always_inline))
+spin_unlock(spinlock_t *lock)
+{
+	if (xchg(lock, 0) == 0)
+		panic(" thread_unlock: bad lock");
+}
+thdid_t create_thread(void(*func)(void*), void*para);
+int delete_thread(thdid_t tar);
+void wait_thread(thdid_t tar);
 
 /* File open modes */
 #define	O_RDONLY	0x0000		/* open for reading only */

@@ -14,6 +14,7 @@
 #include <kern/cpu.h>
 #include <kern/spinlock.h>
 #include <kern/time.h>
+#include <kern/kdebug.h>
 
 static struct Taskstate ts;
 
@@ -359,21 +360,24 @@ trap(struct Trapframe *tf)
 		// serious kernel work.
 		// LAB 4: Your code here.
 		lock_kernel();
-		assert(curenv);
+		assert(curthd);
 
 		// Garbage collect if current enviroment is a zombie
-		if (curenv->env_status == ENV_DYING) {
-			env_free(curenv);
-			curenv = NULL;
+		if (curthd->thd_status == THD_DYING) {
+			thd_free(curthd);
+			if (curenv->env_thd_head == NULL) {
+				env_free(curenv);
+			}
+			curthd = NULL;
 			sched_yield();
 		}
 
 		// Copy trap frame (which is currently on the stack)
 		// into 'curenv->env_tf', so that running the environment
 		// will restart at the trap point.
-		curenv->env_tf = *tf;
+		curthd->thd_tf = *tf;
 		// The trapframe on the stack should be ignored from here on.
-		tf = &curenv->env_tf;
+		tf = &curthd->thd_tf;
 	}
 
 	// Record that tf is the last real trapframe so
@@ -386,8 +390,8 @@ trap(struct Trapframe *tf)
 	// If we made it to this point, then no other environment was
 	// scheduled, so we should return to the current environment
 	// if doing so makes sense.
-	if (curenv && curenv->env_status == ENV_RUNNING)
-		env_run(curenv);
+	if (curthd && curthd->thd_status == THD_RUNNING && curthd->thd_env->env_status == ENV_RUNNABLE)
+		thd_run(curthd);
 	else
 		sched_yield();
 }
@@ -406,7 +410,20 @@ page_fault_handler(struct Trapframe *tf)
 	// LAB 3: Your code here.
 	if ((tf->tf_cs & 3) == 0) //内核态发生缺页中断直接panic
 		panic("page_fault_handler():page fault in kernel mode!\n");
-
+		uint32_t *ebp = (uint32_t *)read_ebp();
+		struct Eipdebuginfo eipDebugInfo;
+		while(ebp != 0){
+			uint32_t eip = *(ebp + 1);
+			//打印ebp，eip，最近的五个参数
+			cprintf("ebp %08x eip %08x args %08x %08x %08x %08x %08x\n", ebp, eip, *(ebp + 2), *(ebp + 3), *(ebp + 4), *(ebp + 5), *(ebp + 6));
+			//打印文件名等
+			debuginfo_eip((uintptr_t)eip, &eipDebugInfo);
+			//cprintf("%d", eipDebugInfo.eip_fn_namelen);
+			cprintf("\t%s:%d: %.*s+%d\n", eipDebugInfo.eip_file, eipDebugInfo.eip_line, eipDebugInfo.eip_fn_namelen, eipDebugInfo.eip_fn_name, eip - eipDebugInfo.eip_fn_addr);
+			//cprintf(": %.*s+%d\n", eipdebuginfo.eip_fn_namelen, eipdebuginfo.eip_fn_name, eipdebuginfo.eip_fn_addr);
+			//更新ebp
+			ebp = (uint32_t *)(*ebp);
+		}
 	// We've already handled kernel-mode exceptions, so if we get here,
 	// the page fault happened in user mode.
 
@@ -443,13 +460,13 @@ page_fault_handler(struct Trapframe *tf)
 	if(curenv->env_pgfault_upcall){
 		struct UTrapframe *utr;
 		// 如果已经有了异常栈，我们就直接在后面添加一个UTrapframe，否则就先把跳到异常栈。 这是为了处理多级中断
-		if (tf->tf_esp >= UXSTACKTOP-PGSIZE && tf->tf_esp < UXSTACKTOP) {
+		if (tf->tf_esp >= curthd->thd_uxstack - PGSIZE && tf->tf_esp < curthd->thd_uxstack) {
 			// 异常模式下陷入
 			utr = (struct UTrapframe *)(tf->tf_esp - sizeof(struct UTrapframe) - 4);
 		}
 		else {
 			// 非异常模式下陷入
-			utr = (struct UTrapframe *)(UXSTACKTOP - sizeof(struct UTrapframe));	
+			utr = (struct UTrapframe *)(curthd->thd_uxstack - sizeof(struct UTrapframe));	
 		}
 		// 检查异常栈是否溢出
 		user_mem_assert(curenv, (const void *) utr, sizeof(struct UTrapframe), PTE_P|PTE_W);
@@ -460,9 +477,9 @@ page_fault_handler(struct Trapframe *tf)
 		utr->utf_eflags = tf->tf_eflags;
 		utr->utf_esp = tf->tf_esp; // UXSTACKTOP栈上需要保存发生缺页异常时的%esp和%eip
 		// 设置eip，回到用户态
-		curenv->env_tf.tf_eip = (uintptr_t)curenv->env_pgfault_upcall;
-		curenv->env_tf.tf_esp = (uintptr_t)utr;
-		env_run(curenv); // 重新进入用户态
+		curthd->thd_tf.tf_eip = (uintptr_t)curenv->env_pgfault_upcall;
+		curthd->thd_tf.tf_esp = (uintptr_t)utr;
+		thd_run(curthd); // 重新进入用户态
 	}
 	else{
 		// Destroy the environment that caused the fault.

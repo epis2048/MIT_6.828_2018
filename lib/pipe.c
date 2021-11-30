@@ -78,13 +78,13 @@ _pipeisclosed(struct Fd *fd, struct Pipe *p)
 	int n, nn, ret;
 
 	while (1) {
-		n = thisenv->env_runs;
+		n = thisthd->thd_runs;
 		ret = pageref(fd) == pageref(p);
-		nn = thisenv->env_runs;
+		nn = thisthd->thd_runs;
 		if (n == nn)
 			return ret;
 		if (n != nn && ret == 1)
-			cprintf("pipe race avoided\n", n, thisenv->env_runs, ret);
+			cprintf("pipe race avoided\n", n, thisthd->thd_runs, ret);
 	}
 }
 

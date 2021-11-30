@@ -12,7 +12,6 @@ enum {
 	SYS_page_unmap,
 	SYS_exofork,
 	SYS_env_set_status,
-	SYS_env_set_trapframe,
 	SYS_env_set_pgfault_upcall,
 	SYS_yield,
 	SYS_ipc_try_send,
@@ -20,6 +19,12 @@ enum {
 	SYS_time_msec,
 	SYS_packet_try_send,
 	SYS_packet_receive,
+	SYS_getthdid,
+	SYS_thd_create,
+	SYS_thd_destroy,
+	SYS_thd_set_status,
+	SYS_thd_set_trapframe,
+	SYS_thd_set_uxstack,
 	NSYSCALLS
 };
 

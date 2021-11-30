@@ -19,7 +19,11 @@ struct Env *envs = NULL;		// All environments
 static struct Env *env_free_list;	// Free environment list
 					// (linked by Env->env_link)
 
+struct Thd *thds = NULL;
+static struct Thd *thd_free_list;
+
 #define ENVGENSHIFT	12		// >= LOGNENV
+#define THDGENSHIFT 12
 
 // Global descriptor table.
 //
@@ -114,6 +118,7 @@ envid2env(envid_t envid, struct Env **env_store, bool checkperm)
 // they are in the envs array (i.e., so that the first call to
 // env_alloc() returns envs[0]).
 // 初始化envs数组，构建env_free_list链表，使用头插法
+// 修改：还要初始化thds
 void
 env_init(void)
 {
@@ -122,8 +127,16 @@ env_init(void)
 	env_free_list = NULL;
 	for(int i = NENV - 1; i >= 0; i--){
 		envs[i].env_id = 0;
+		envs[i].env_status = ENV_FREE;
 		envs[i].env_link = env_free_list;
 		env_free_list = &envs[i];
+	}
+	thd_free_list = NULL;
+	for(int i = NTHD - 1; i >= 0; i--){
+		thds[i].thd_link = thd_free_list;
+		thds[i].thd_id = 0;
+		thds[i].thd_status = THD_FREE;
+		thd_free_list = &thds[i];
 	}
 	// Per-CPU part of the initialization
 	env_init_percpu();
@@ -212,13 +225,22 @@ env_alloc(struct Env **newenv_store, envid_t parent_id)
 	int32_t generation;
 	int r;
 	struct Env *e;
+	struct Thd *t;
 
 	if (!(e = env_free_list))
 		return -E_NO_FREE_ENV;
+	
+	e->env_thd_head = NULL;
+	e->env_thd_tail = NULL;
+
+	if ((r = thd_alloc(&t, e)) < 0)
+		return r;
 
 	// Allocate and set up the page directory for this environment.
-	if ((r = env_setup_vm(e)) < 0)
+	if ((r = env_setup_vm(e)) < 0) {
+		thd_free(t);
 		return r;
+	}
 
 	// Generate an env_id for this environment.
 	generation = (e->env_id + (1 << ENVGENSHIFT)) & ~(NENV - 1);
@@ -230,13 +252,15 @@ env_alloc(struct Env **newenv_store, envid_t parent_id)
 	e->env_parent_id = parent_id;
 	e->env_type = ENV_TYPE_USER;
 	e->env_status = ENV_RUNNABLE;
-	e->env_runs = 0;
+
+	// 注释掉Env中放弃的字段
+	// e->env_runs = 0;
 
 	// Clear out all the saved register state,
 	// to prevent the register values
 	// of a prior environment inhabiting this Env structure
 	// from "leaking" into our new environment.
-	memset(&e->env_tf, 0, sizeof(e->env_tf));
+	// memset(&e->env_tf, 0, sizeof(e->env_tf));
 
 	// Set up appropriate initial values for the segment registers.
 	// GD_UD is the user data segment selector in the GDT, and
@@ -246,16 +270,16 @@ env_alloc(struct Env **newenv_store, envid_t parent_id)
 	// we switch privilege levels, the hardware does various
 	// checks involving the RPL and the Descriptor Privilege Level
 	// (DPL) stored in the descriptors themselves.
-	e->env_tf.tf_ds = GD_UD | 3;
-	e->env_tf.tf_es = GD_UD | 3;
-	e->env_tf.tf_ss = GD_UD | 3;
-	e->env_tf.tf_esp = USTACKTOP;
-	e->env_tf.tf_cs = GD_UT | 3;
+	// e->env_tf.tf_ds = GD_UD | 3;
+	// e->env_tf.tf_es = GD_UD | 3;
+	// e->env_tf.tf_ss = GD_UD | 3;
+	// e->env_tf.tf_esp = USTACKTOP;
+	// e->env_tf.tf_cs = GD_UT | 3;
 	// You will set e->env_tf.tf_eip later.
 
 	// Enable interrupts while in user mode.
 	// LAB 4: Your code here.
-	e->env_tf.tf_eflags |= FL_IF;
+	// e->env_tf.tf_eflags |= FL_IF;
 
 	// Clear the page fault handler until user installs one.
 	e->env_pgfault_upcall = 0;
@@ -373,7 +397,8 @@ load_icode(struct Env *e, uint8_t *binary)
 			memcpy((void*)ph[i].p_va, binary + ph[i].p_offset, ph[i].p_filesz);
 		}
 	}
-	e->env_tf.tf_eip = ELF->e_entry; // EIP指向程序入口
+	// e->env_tf.tf_eip = ELF->e_entry; // EIP指向程序入口
+	e->env_thd_head->thd_tf.tf_eip = ELF->e_entry; // 进程中的首个线程
 
 	// Now map one page for the program's initial stack
 	// at virtual address USTACKTOP - PGSIZE.
@@ -404,7 +429,10 @@ env_create(uint8_t *binary, enum EnvType type)
 		panic("env_create: Create Env failed: %e", r);
 	}
 	if (type == ENV_TYPE_FS) {
-		e->env_tf.tf_eflags |= FL_IOPL_MASK;
+		if (e->env_thd_head != NULL) {
+			// cprintf("given io: %d\n", e->env_type);
+			e->env_thd_head->thd_tf.tf_eflags |= FL_IOPL_MASK;
+		}
 	}
 	e->env_type = type;
 	load_icode(e, binary);
@@ -474,15 +502,28 @@ env_destroy(struct Env *e)
 	// If e is currently running on other CPUs, we change its state to
 	// ENV_DYING. A zombie environment will be freed the next time
 	// it traps to the kernel.
-	if (e->env_status == ENV_RUNNING && curenv != e) {
+	struct Thd *t;
+	
+	for (t = e->env_thd_head; t != NULL; t = t->thd_next) {
+		if (t->thd_status == THD_RUNNING && curthd != t) {
+			t->thd_status = THD_DYING;
+		}
+		else {
+			thd_free(t);
+		}
+	}
+
+	if (e->env_thd_head != NULL) {
 		e->env_status = ENV_DYING;
-		return;
+	}
+	else {
+		env_free(e);
 	}
 
 	env_free(e);
 
-	if (curenv == e) {
-		curenv = NULL;
+	if (curthd->thd_env == e) {
+		curthd = NULL;
 		sched_yield();
 	}
 }
@@ -495,10 +536,10 @@ env_destroy(struct Env *e)
 // This function does not return.
 //
 void
-env_pop_tf(struct Trapframe *tf)
+thd_pop_tf(struct Trapframe *tf)
 {
 	// Record the CPU we are running on for user-space debugging
-	curenv->env_cpunum = cpunum();
+	curthd->thd_cpunum = cpunum();
 
 	asm volatile(
 		"\tmovl %0,%%esp\n"
@@ -516,9 +557,9 @@ env_pop_tf(struct Trapframe *tf)
 // Note: if this is the first call to env_run, curenv is NULL.
 //
 // This function does not return.
-// 开启一段Env
+// 开启一段thd
 void
-env_run(struct Env *e)
+thd_run(struct Thd *t)
 {
 	// Step 1: If this is a context switch (a new environment is running):
 	//	   1. Set the current environment (if any) back to
@@ -538,15 +579,131 @@ env_run(struct Env *e)
 	//	e->env_tf to sensible values.
 
 	// LAB 3: Your code here.
-	if(curenv != NULL && curenv->env_status == ENV_RUNNING){ //如果当前有运行的Env，则挂起
-		curenv->env_status = ENV_RUNNABLE;
+	if(curthd != NULL && curthd->thd_status == THD_RUNNING){ //如果当前有运行的Thd，则挂起
+		curthd->thd_status = THD_RUNNABLE;
 	}
-	curenv = e;
-	e->env_status = ENV_RUNNING;
-	e->env_runs++;
-	lcr3(PADDR(e->env_pgdir)); // 加载当前Env的线性地址到分页寄存器
+	curthd = t;
+	t->thd_status = THD_RUNNING;
+	if (curthd != t) t->thd_runs++;
+	lcr3(PADDR(t->thd_env->env_pgdir)); // 加载当前Thd的线性地址到分页寄存器
 	// Lab4: 释放内核
 	unlock_kernel();
-	env_pop_tf(&e->env_tf); // 从栈中取tf结构
+	thd_pop_tf(&t->thd_tf); // 从栈中取tf结构
 }
 
+int thd_alloc(struct Thd **newthd_store, struct Env *env) {
+	// 模仿env_alloc
+	int32_t generation;
+	int r;
+	struct Thd *t;
+	
+	if (!(t = thd_free_list))
+		return -E_NO_FREE_ENV;
+
+	generation = (t->thd_id + (1 << THDGENSHIFT)) & ~(NTHD - 1);
+	if (generation <= 0)
+		generation = 1 << THDGENSHIFT;
+	t->thd_id = generation | (t - thds);
+
+	t->thd_env = env;
+	t->thd_status = THD_RUNNABLE;
+	t->thd_runs = 0;
+	t->thd_uxstack = UXSTACKTOP;
+
+	// Clear out all the saved register state,
+	// to prevent the register values
+	// of a prior environment inhabiting this Env structure
+	// from "leaking" into our new environment.
+	memset(&t->thd_tf, 0, sizeof(t->thd_tf));
+	
+	// Set up appropriate initial values for the segment registers.
+	// GD_UD is the user data segment selector in the GDT, and
+	// GD_UT is the user text segment selector (see inc/memlayout.h).
+	// The low 2 bits of each segment register contains the
+	// Requestor Privilege Level (RPL); 3 means user mode.  When
+	// we switch privilege levels, the hardware does various
+	// checks involving the RPL and the Descriptor Privilege Level
+	// (DPL) stored in the descriptors themselves.
+	t->thd_tf.tf_ds = GD_UD | 3;
+	t->thd_tf.tf_es = GD_UD | 3;
+	t->thd_tf.tf_ss = GD_UD | 3;
+	t->thd_tf.tf_esp = USTACKTOP;
+	t->thd_tf.tf_cs = GD_UT | 3;
+	// Enable interrupts while in user mode.
+	t->thd_tf.tf_eflags |= FL_IF;
+
+	// 插入双向链表
+	if (env->env_thd_head) {
+		t->thd_prev = env->env_thd_tail;
+		t->thd_next = NULL;
+		env->env_thd_tail->thd_next = t;
+		env->env_thd_tail = t;
+	} else {
+		t->thd_prev = NULL;
+		t->thd_next = NULL;
+		env->env_thd_head = t;
+		env->env_thd_tail = t;
+	}
+
+	thd_free_list = t->thd_link;
+	*newthd_store = t;
+	return 0;
+}
+
+void thd_free(struct Thd *t) {
+	assert(t->thd_status != THD_FREE);
+	
+	t->thd_status = THD_FREE;
+
+	if (t->thd_prev)
+		t->thd_prev->thd_next = t->thd_next;
+	else
+		t->thd_env->env_thd_head = t->thd_next;
+	if (t->thd_next)
+		t->thd_next->thd_prev = t->thd_prev;
+	else
+		t->thd_env->env_thd_tail = t->thd_prev;
+
+	t->thd_link = thd_free_list;
+	thd_free_list = t;
+}
+
+void thd_destroy(struct Thd *t) {
+	if (t->thd_status == THD_RUNNING && curthd != t) {
+		t->thd_status = THD_DYING;
+		return;
+	}
+
+	thd_free(t);
+
+	if (t->thd_env->env_thd_head == NULL)
+		env_free(t->thd_env);
+
+	if (curthd == t) {
+		curthd = NULL;
+		sched_yield();
+	}
+}
+
+int thdid2thd(thdid_t thdid, struct Thd **thd_store, bool checkperm) {
+	struct Thd *t;
+
+	if (thdid == 0) {
+		*thd_store = curthd;
+		return 0;
+	}
+
+	t = &thds[ENVX(thdid)];
+	if (t->thd_status == THD_FREE || t->thd_id != thdid) {
+		*thd_store = 0;
+		return -E_BAD_ENV;
+	}
+
+	if (checkperm && t->thd_env != curenv) {
+		*thd_store = 0;
+		return -E_BAD_ENV;
+	}
+
+	*thd_store = t;
+	return 0;
+}

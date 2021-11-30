@@ -25,6 +25,7 @@ struct Command {
 static struct Command commands[] = {
 	{ "help", "Display this list of commands", mon_help },
 	{ "kerninfo", "Display information about the kernel", mon_kerninfo },
+	{ "backtrace", "Display function stack one line at a time", mon_backtrace},
 };
 
 /***** Implementations of basic kernel monitor commands *****/

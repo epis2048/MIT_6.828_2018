@@ -85,13 +85,15 @@ sys_exofork(void)
 
 	// LAB 4: Your code here.
 	struct Env * e;
+	struct Thd * t;
 	int ret = env_alloc(&e, curenv->env_id);
 	if(ret < 0){
 		return ret;
 	}
-	e->env_tf = curenv->env_tf; // 复制寄存器
+	t = e->env_thd_head;
+	t->thd_tf = curthd->thd_tf; // 复制寄存器
+	t->thd_tf.tf_regs.reg_eax = 0; // 新的进程从sys_exofork()的返回值应该为0
 	e->env_status = ENV_NOT_RUNNABLE; // 进程状态
-	e->env_tf.tf_regs.reg_eax = 0; // 新的进程从sys_exofork()的返回值应该为0
 	return e->env_id;
 	// panic("sys_exofork not implemented");
 }
@@ -132,6 +134,7 @@ sys_env_set_status(envid_t envid, int status)
 // Returns 0 on success, < 0 on error.  Errors are:
 //	-E_BAD_ENV if environment envid doesn't currently exist,
 //		or the caller doesn't have permission to change envid.
+/*
 static int
 sys_env_set_trapframe(envid_t envid, struct Trapframe *tf)
 {
@@ -149,6 +152,7 @@ sys_env_set_trapframe(envid_t envid, struct Trapframe *tf)
 	e->env_tf.tf_eflags |= FL_IF;
 	return 0;
 }
+*/
 
 // Set the page fault upcall for 'envid' by modifying the corresponding struct
 // Env's 'env_pgfault_upcall' field.  When 'envid' causes a page fault, the
@@ -371,8 +375,9 @@ sys_ipc_try_send(envid_t envid, uint32_t value, void *srcva, unsigned perm)
 	env->env_ipc_recving = false;
 	env->env_ipc_from = curenv->env_id;
 	env->env_ipc_value = value;
-	env->env_status = ENV_RUNNABLE;
-	env->env_tf.tf_regs.reg_eax = 0;
+	env->env_ipc_perm = 0;
+	env->env_ipc_thd->thd_status = THD_RUNNABLE;
+	env->env_ipc_thd->thd_tf.tf_regs.reg_eax = 0;
 	return 0;
 }
 
@@ -395,7 +400,8 @@ sys_ipc_recv(void *dstva)
 	if ((dstva < (void*)UTOP) && PGOFF(dstva)) return -E_INVAL; // 报错
 	curenv->env_ipc_recving = true;
 	curenv->env_ipc_dstva = dstva;
-	curenv->env_status = ENV_NOT_RUNNABLE;
+	curenv->env_ipc_thd = curthd;
+	curthd->thd_status = THD_NOT_RUNNABLE;
 	sys_yield();
 	return 0;
 }
@@ -417,6 +423,64 @@ sys_packet_try_send(void *addr, uint32_t len) {
 static int
 sys_packet_receive(void *addr, uint32_t *len) {
     return e1000_receive(addr, len);
+}
+
+static thdid_t sys_getthdid(void) {
+	return curthd->thd_id;
+}
+
+static thdid_t sys_thd_create() {
+	struct Thd * t;
+	int r;
+	r = thd_alloc(&t,curenv);
+	if(r < 0) 
+		return r;
+	t->thd_status = THD_NOT_RUNNABLE;
+	return t->thd_id;
+}
+
+static int sys_thd_destroy(thdid_t tid) {
+	int r;
+	struct Thd * t;
+	r = thdid2thd(tid, &t, true);
+	if (r < 0) return r;
+	thd_destroy(t);
+	return 0;
+}
+
+static int sys_thd_set_status(thdid_t tid, int status) {
+	struct Thd * t;
+	int r;
+	r = thdid2thd(tid, &t, true);
+	if (r < 0) return r;
+	if (status != THD_RUNNABLE && status != THD_NOT_RUNNABLE)
+		return -E_INVAL;
+	t->thd_status  = status;
+	return 0;
+}
+static int sys_thd_set_trapframe(thdid_t tid, struct Trapframe *tf) {
+	struct Thd * t;
+	int r;
+	r = thdid2thd(tid, &t, true);
+	if (r < 0) return r;
+	user_mem_assert(curenv, tf, sizeof(struct Trapframe), 0);
+	t->thd_tf = *tf;
+	t->thd_tf.tf_ds = GD_UD | 3;
+	t->thd_tf.tf_es = GD_UD | 3;
+	t->thd_tf.tf_ss = GD_UD | 3;
+	t->thd_tf.tf_cs = GD_UT | 3;
+        t->thd_tf.tf_eflags |= FL_IF;
+	return 0;
+}
+
+static int sys_thd_set_uxstack(thdid_t tid, uintptr_t uxstack) {
+	struct Thd * t;
+	int r;
+	r = thdid2thd(tid, &t, true);
+	if (r < 0) return r;
+	if (PGOFF(uxstack)) return -E_INVAL;
+	t->thd_uxstack = uxstack;
+	return 0;
 }
 
 // Dispatches to the correct kernel function, passing the arguments.
@@ -470,9 +534,6 @@ syscall(uint32_t syscallno, uint32_t a1, uint32_t a2, uint32_t a3, uint32_t a4, 
 		case SYS_ipc_recv:                                                                                              
 			ret =  sys_ipc_recv((void *)a1);
 			break;
-		case SYS_env_set_trapframe:
-			ret =  sys_env_set_trapframe((envid_t)a1,(struct Trapframe*)a2);
-			break;
 		case SYS_time_msec:
 			ret = sys_time_msec();
 			break;
@@ -481,6 +542,24 @@ syscall(uint32_t syscallno, uint32_t a1, uint32_t a2, uint32_t a3, uint32_t a4, 
 			break;
 		case (SYS_packet_receive):
         	ret = sys_packet_receive((void *)a1,(size_t *)a2);
+			break;
+		case SYS_getthdid:
+			ret = sys_getthdid();
+			break;
+		case SYS_thd_create:
+			ret = sys_thd_create();
+			break;
+		case SYS_thd_destroy:
+			ret = sys_thd_destroy((thdid_t) a1);
+			break;
+		case SYS_thd_set_status:
+			ret = sys_thd_set_status((thdid_t)a1,(int) a2);
+			break;
+		case SYS_thd_set_trapframe:
+			ret = sys_thd_set_trapframe((thdid_t)a1,(struct Trapframe *)a2);
+			break;
+		case SYS_thd_set_uxstack:
+			ret = sys_thd_set_uxstack((thdid_t) a1, a2);
 			break;
 		default:
 			ret = -E_INVAL;

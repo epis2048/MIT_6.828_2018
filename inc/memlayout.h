@@ -114,6 +114,7 @@
 #define UPAGES		(UVPT - PTSIZE)
 // Read-only copies of the global env structures
 #define UENVS		(UPAGES - PTSIZE)
+#define UTHDS		(UENVS + NENV * sizeof(struct Env))
 
 /*
  * Top of user VM. User can manipulate VA from UTOP-1 and down!
@@ -126,6 +127,9 @@
 // Next page left invalid to guard against exception stack overflow; then:
 // Top of normal user stack
 #define USTACKTOP	(UTOP - 2*PGSIZE)
+// 线程用
+#define UTXSTACKTOP(x) (UTOP - (x) * PGSIZE * 4)
+#define UTSTACKTOP(x) (UTXSTACKTOP(x) - PGSIZE * 2)
 
 // Where user programs generally begin
 #define UTEXT		(2*PTSIZE)

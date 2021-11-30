@@ -166,9 +166,10 @@ mem_init(void)
 	//////////////////////////////////////////////////////////////////////
 	// Make 'envs' point to an array of size 'NENV' of 'struct Env'.
 	// LAB 3: Your code here.
-	// 为ENVS数组分配空间
-	envs = (struct Env*) boot_alloc(sizeof(struct Env) * NENV);
-	memset(envs, 0, sizeof(struct Env) * NENV);
+	// 为ENVS数组分配空间，还有Thd
+	envs = (struct Env*) boot_alloc(sizeof(struct Env) * NENV + sizeof(struct Thd) * NTHD);
+	thds = (struct Thd*)&envs[NENV];
+	memset(envs, 0, sizeof(struct Env) * NENV + sizeof(struct Thd) * NTHD);
 	
 
 	//////////////////////////////////////////////////////////////////////
@@ -205,7 +206,10 @@ mem_init(void)
 	//    - the new image at UENVS  -- kernel R, user R
 	//    - envs itself -- kernel RW, user NONE
 	// LAB 3: Your code here.
-	boot_map_region(kern_pgdir, UENVS, PTSIZE, PADDR(envs), PTE_U);
+	// 这里也要改
+	boot_map_region(kern_pgdir, UENVS, 
+		ROUNDUP(sizeof(struct Env) * NENV + sizeof(struct Thd) * NTHD, PGSIZE),
+		PADDR(envs), PTE_U);
 
 	//////////////////////////////////////////////////////////////////////
 	// Use the physical memory that 'bootstack' refers to as the kernel

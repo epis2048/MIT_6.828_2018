@@ -11,7 +11,7 @@ void sched_halt(void);
 void
 sched_yield(void)
 {
-	struct Env *idle;
+	struct Thd *idle;
 
 	// Implement simple round-robin scheduling.
 	//
@@ -30,26 +30,28 @@ sched_yield(void)
 	// below to halt the cpu.
 
 	// LAB 4: Your code here.
-	// 从当前运行的Env的下一个Env开始
+	// 这里的基本单位改成Thd，重写一遍吧
 	
-	int nextEnvID = 0;
-	if(curenv) {
-		nextEnvID = ENVX(curenv->env_id);
+	struct Thd *cur = curthd;
+	if (cur == NULL) {
+		for(idle = thds; idle != thds + NTHD; idle++)
+			if (idle->thd_status == THD_RUNNABLE && idle->thd_env->env_status == ENV_RUNNABLE)
+				thd_run(idle);
 	}
-	// 寻找一个能运行的Env
-	for(int i = 0; i < NENV; i++){
-		if(envs[(nextEnvID + i) % NENV].env_status == ENV_RUNNABLE){
-			envs[(nextEnvID + i) % NENV].env_cpunum = cpunum();
-			env_run(&envs[(nextEnvID + i) % NENV]);
-		}
+	else {
+		// 从现在找到末尾
+		for(idle = cur + 1; idle != thds + NTHD; idle++)
+			if (idle->thd_status == THD_RUNNABLE && idle->thd_env->env_status == ENV_RUNNABLE)
+				thd_run(idle);
+		// 没找到就从头找到现在
+		for(idle = thds; idle != cur; idle++)
+			if (idle->thd_status == THD_RUNNABLE && idle->thd_env->env_status == ENV_RUNNABLE)
+				thd_run(idle);
+		// 都没有就看看现在的
+		if (cur->thd_status == THD_RUNNING && cur->thd_env->env_status == ENV_RUNNABLE)
+			thd_run(cur);
 	}
-	// 如果一个都找不到，那就继续运行当前的
-	if(curenv && curenv->env_status == ENV_RUNNING){
-		curenv->env_cpunum = cpunum();
-		env_run(curenv);
-	}
-	// 如果自己也运行不了，那当前CPU就停机吧
-	
+	// 如果实在找不到，就停机吧
 	// sched_halt never returns
 	sched_halt();
 }
@@ -64,20 +66,20 @@ sched_halt(void)
 
 	// For debugging and testing purposes, if there are no runnable
 	// environments in the system, then drop into the kernel monitor.
-	for (i = 0; i < NENV; i++) {
-		if ((envs[i].env_status == ENV_RUNNABLE ||
-		     envs[i].env_status == ENV_RUNNING ||
-		     envs[i].env_status == ENV_DYING))
+	for (i = 0; i < NTHD; i++) {
+		if ((thds[i].thd_status == THD_RUNNABLE ||
+		     thds[i].thd_status == THD_RUNNING ||
+		     thds[i].thd_status == THD_DYING))
 			break;
 	}
-	if (i == NENV) {
+	if (i == NTHD) {
 		cprintf("No runnable environments in the system!\n");
 		while (1)
 			monitor(NULL);
 	}
 
 	// Mark that no environment is running on this CPU
-	curenv = NULL;
+	curthd = NULL;
 	lcr3(PADDR(kern_pgdir));
 
 	// Mark that this CPU is in the HALT state, so that when

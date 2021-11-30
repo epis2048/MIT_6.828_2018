@@ -104,8 +104,9 @@ spawn(const char *prog, const char **argv)
 	child = r;
 
 	// Set up trap frame, including initial stack.
-	child_tf = envs[ENVX(child)].env_tf;
+	child_tf = envs[ENVX(child)].env_thd_head->thd_tf;
 	child_tf.tf_eip = elf->e_entry;
+	thdid_t thdid = envs[ENVX(child)].env_thd_head->thd_id;
 
 	if ((r = init_stack(child, argv, &child_tf.tf_esp)) < 0)
 		return r;
@@ -130,7 +131,7 @@ spawn(const char *prog, const char **argv)
 		panic("copy_shared_pages: %e", r);
 
 	child_tf.tf_eflags |= FL_IOPL_3;   // devious: see user/faultio.c
-	if ((r = sys_env_set_trapframe(child, &child_tf)) < 0)
+	if ((r = sys_thd_set_trapframe(thdid, &child_tf)) < 0)
 		panic("sys_env_set_trapframe: %e", r);
 
 	if ((r = sys_env_set_status(child, ENV_RUNNABLE)) < 0)

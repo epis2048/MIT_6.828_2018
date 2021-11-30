@@ -49,7 +49,9 @@ ipc_send(envid_t to_env, uint32_t val, void *pg, int perm)
 {
 	// LAB 4: Your code here.
 	// panic("ipc_send not implemented");
+	static spinlock_t ipc_lock = 0;
 	if (pg == NULL) pg = (void*)-1;
+	spin_lock(&ipc_lock);
 	int r;
 	while(1) {
 		r = sys_ipc_try_send(to_env, val, pg, perm);
@@ -61,6 +63,7 @@ ipc_send(envid_t to_env, uint32_t val, void *pg, int perm)
 			panic("ipc_send():%e", r);
 		}
 	}
+	spin_unlock(&ipc_lock);
 }
 
 // Find the first environment of the given type.  We'll use this to
