@@ -520,7 +520,7 @@ env_destroy(struct Env *e)
 		env_free(e);
 	}
 
-	env_free(e);
+	//env_free(e);
 
 	if (curthd->thd_env == e) {
 		curthd = NULL;

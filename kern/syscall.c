@@ -42,7 +42,8 @@ sys_cgetc(void)
 static envid_t
 sys_getenvid(void)
 {
-	return curenv->env_id;
+	if (curenv != NULL) return curenv->env_id;
+	else return -1;
 }
 
 // Destroy a given environment (possibly the currently running environment).
@@ -375,7 +376,7 @@ sys_ipc_try_send(envid_t envid, uint32_t value, void *srcva, unsigned perm)
 	env->env_ipc_recving = false;
 	env->env_ipc_from = curenv->env_id;
 	env->env_ipc_value = value;
-	env->env_ipc_perm = 0;
+	// env->env_ipc_perm = 0;
 	env->env_ipc_thd->thd_status = THD_RUNNABLE;
 	env->env_ipc_thd->thd_tf.tf_regs.reg_eax = 0;
 	return 0;
@@ -469,7 +470,7 @@ static int sys_thd_set_trapframe(thdid_t tid, struct Trapframe *tf) {
 	t->thd_tf.tf_es = GD_UD | 3;
 	t->thd_tf.tf_ss = GD_UD | 3;
 	t->thd_tf.tf_cs = GD_UT | 3;
-        t->thd_tf.tf_eflags |= FL_IF;
+    t->thd_tf.tf_eflags |= FL_IF;
 	return 0;
 }
 

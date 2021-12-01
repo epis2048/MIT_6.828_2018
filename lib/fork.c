@@ -66,18 +66,30 @@ duppage(envid_t envid, unsigned pn)
 	int r;
 
 	// LAB 4: Your code here.
-	void* vaddr=(void*)(pn*PGSIZE);
-	if(uvpt[pn]&PTE_SHARE){ // Lab5: 对于标识为PTE_SHARE的页，拷贝映射关系，并且两个进程都有读写权限
-		if((r = sys_page_map(0, vaddr, envid, vaddr, uvpt[pn] & PTE_SYSCALL)) < 0)return r;
+	pn *= PGSIZE;
+	void* vaddr=(void*)(pn);
+	if (!(uvpd[PDX(pn)] & PTE_P))
+		return 0;
+	int perm = 0xfff & uvpt[PGNUM(pn)];
+	if (!(perm & PTE_P))
+		return 0;
+	if (perm & PTE_SHARE) {
+		// Lab5: 对于标识为PTE_SHARE的页，拷贝映射关系，并且两个进程都有读写权限
+		if((r = sys_page_map(0, vaddr, envid, vaddr, PTE_SYSCALL)) < 0)
+			panic("At duppage 0: %e", r);
 	}
-	else if((uvpt[pn] & PTE_W) || (uvpt[pn] & PTE_COW)){
-		if ((r = sys_page_map(0, vaddr, envid, vaddr, PTE_P | PTE_U | PTE_COW)) < 0)
-            return r;//映射当前页为写时符合
-        if ((r = sys_page_map(0, vaddr, 0, vaddr, PTE_P | PTE_U | PTE_COW)) < 0)
-            return r;//把自己当前页页标记成写时复制。
+	else if ((perm & PTE_U) && ((perm & PTE_W) || (perm & PTE_COW))) {
+		// 映射当前页为写时复制
+		if ((r = sys_page_map(0, vaddr, envid, vaddr, PTE_COW | PTE_U | PTE_P)) < 0)
+			panic("At duppage 1: %e", r);
+		// 把自己当前页页标记成写时复制
+		if ((r = sys_page_map(0, vaddr, 0, vaddr, PTE_COW | PTE_P | PTE_U)) < 0)
+			panic("At duppage 2: %e", r);
 	}
-	else if((r = sys_page_map(0, vaddr, envid, vaddr, PTE_P | PTE_U)) < 0) {
-		return r;//如果当前页已经是写时复制  就不需要更改了
+	else {
+		// 如果当前页已经是写时复制  就不需要更改了
+		if ((r = sys_page_map(0, vaddr, envid, vaddr, perm)) < 0)
+			panic("At duppage 3: %e", r);
 	}
 	//panic("duppage not implemented");
 	return 0;
@@ -112,18 +124,22 @@ fork(void)
 		return cenvid;
 	}
 	if(cenvid>0){//如果是 父亲进程
-		for (pn=PGNUM(UTEXT); pn<PGNUM(USTACKTOP); pn++){ //复制UTEXT 到USTACKTOP的页
-            if ((uvpd[pn >> 10] & PTE_P) && (uvpt[pn] & PTE_P))
-                if ((r = duppage(cenvid, pn)) < 0)
-                    return r;
+		for(int i = 0; i < UTOP; i += PGSIZE)
+			if (i != UXSTACKTOP - PGSIZE)
+				duppage(cenvid, PGNUM(i));
+		if ((r = sys_page_alloc(cenvid, (void *)(UXSTACKTOP-PGSIZE), PTE_U | PTE_P | PTE_W)) < 0) {  //分配一个新的页
+            panic("lib/fork.c fork(): error when alloc page!\n");
+			return r;
 		}
-		if ((r = sys_page_alloc(cenvid, (void *)(UXSTACKTOP-PGSIZE), PTE_U | PTE_P | PTE_W)) < 0)  //分配一个新的页
-            return r;
 		extern void _pgfault_upcall(void); //缺页处理
-		if ((r = sys_env_set_pgfault_upcall(cenvid, _pgfault_upcall)) < 0)
-            return r; //为儿子设置一个缺页处理分支
-		if ((r = sys_env_set_status(cenvid, ENV_RUNNABLE)) < 0)//设置成可运行
-            return r;
+		if ((r = sys_env_set_pgfault_upcall(cenvid, _pgfault_upcall)) < 0) {
+            panic("lib/fork.c fork(): error when set pgfault upcall!\n");
+			return r; //为儿子设置一个缺页处理分支
+		}
+		if ((r = sys_env_set_status(cenvid, ENV_RUNNABLE)) < 0) { //设置成可运行
+            panic("lib/fork.c fork(): error when set env status!\n");
+			return r;
+		}
         return cenvid;
 	}
 	else {

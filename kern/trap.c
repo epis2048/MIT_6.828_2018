@@ -408,7 +408,7 @@ page_fault_handler(struct Trapframe *tf)
 	// Handle kernel-mode page faults.
 
 	// LAB 3: Your code here.
-	if ((tf->tf_cs & 3) == 0) //内核态发生缺页中断直接panic
+	if ((tf->tf_cs & 3) == 0) { //内核态发生缺页中断直接panic
 		panic("page_fault_handler():page fault in kernel mode!\n");
 		uint32_t *ebp = (uint32_t *)read_ebp();
 		struct Eipdebuginfo eipDebugInfo;
@@ -424,6 +424,7 @@ page_fault_handler(struct Trapframe *tf)
 			//更新ebp
 			ebp = (uint32_t *)(*ebp);
 		}
+	}
 	// We've already handled kernel-mode exceptions, so if we get here,
 	// the page fault happened in user mode.
 

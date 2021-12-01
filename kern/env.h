@@ -18,7 +18,7 @@ int		env_alloc(struct Env **e, envid_t parent_id);
 void	env_free(struct Env *e);
 void	env_create(uint8_t *binary, enum EnvType type);
 void	env_destroy(struct Env *e);	// Does not return if e == curenv
-int		thd_alloc(struct Thd **newthd_store, struct Env *thd);
+int		thd_alloc(struct Thd **newthd_store, struct Env *env);
 void	thd_free(struct Thd *t);
 void	thd_destroy(struct Thd *t);
 int thdid2thd(thdid_t thdid, struct Thd **thd_store, bool checkperm);
